@@ -51,6 +51,8 @@
     border: 1px solid var(--line); background: var(--panel); color: var(--ink);
   }
   .tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .tab[aria-disabled="true"] { opacity: 0.6; cursor: not-allowed; border-style: dashed; }
+  .lockmsg { margin: -6px 0 12px; color: var(--bad); font-weight: 650; font-size: 0.92rem; min-height: 1.2em; }
   .tab:focus-visible, input[type=range]:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   .grid { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -130,16 +132,34 @@
     <button class="tab" role="tab" id="tab0" aria-selected="true" aria-controls="panelMain" type="button">Plaque: a narrower artery</button>
     <button class="tab" role="tab" id="tab1" aria-selected="false" aria-controls="panelMain" type="button">Growth or weight gain: a longer path</button>
     <button class="tab" role="tab" id="tab2" aria-selected="false" aria-controls="panelMain" type="button">Dehydration or red blood cells: thicker or thinner blood</button>
+    <button class="tab" role="tab" id="tab3" aria-selected="false" aria-disabled="true" aria-controls="panelMain" type="button" title="Open the other three tabs first.">🔒 Combine them</button>
   </div>
+
+  <p class="lockmsg" id="lockMsg" role="status" aria-live="polite"></p>
 
   <div class="grid" id="panelMain">
     <section class="panel controls" aria-label="Controls">
       <p class="story"><strong id="storyTitle"></strong> <span id="storyShort"></span> <span class="tip" tabindex="0"><span class="tipw">What’s happening?</span><span class="tipbody" role="tooltip" id="storyTip"></span></span></p>
       <div class="goal"><strong>Goal:</strong> get the blood flow back to 53.9 mL/min using only the heart’s push. <span class="tip" tabindex="0"><span class="tipw">How close?</span><span class="tipbody" role="tooltip">Flow within 5% of normal counts as normal, which is about 51.2 to 56.6 mL/min.</span></span></div>
 
-      <div class="ctl">
+      <div class="ctl" id="singleCtl">
         <label for="problem"><span class="tip" tabindex="0"><span class="tipw" id="problemLabel"></span><span class="tipbody" role="tooltip" id="problemHint"></span></span> <output id="problemOut" for="problem"></output></label>
         <input id="problem" type="range" min="0" max="7" step="1" value="0">
+      </div>
+
+      <div id="comboCtl" hidden>
+        <div class="ctl">
+          <label for="cPlaque"><span class="tip" tabindex="0"><span class="tipw">Plaque buildup</span><span class="tipbody" role="tooltip">How much plaque has built up. The setting shows the open radius, which starts at 2.0 mm.</span></span> <output id="cPlaqueOut" for="cPlaque"></output></label>
+          <input id="cPlaque" type="range" min="0" max="7" step="1" value="0">
+        </div>
+        <div class="ctl">
+          <label for="cLen"><span class="tip" tabindex="0"><span class="tipw">Artery length</span><span class="tipbody" role="tooltip">How far the blood has to travel through the artery.</span></span> <output id="cLenOut" for="cLen"></output></label>
+          <input id="cLen" type="range" min="10" max="40" step="5" value="10">
+        </div>
+        <div class="ctl">
+          <label for="cEta"><span class="tip" tabindex="0"><span class="tipw">Blood thickness</span><span class="tipbody" role="tooltip">In mPa·s. Water is 1.0 and normal blood is about 3.5. Left is thinner, right is thicker.</span></span> <output id="cEtaOut" for="cEta"></output></label>
+          <input id="cEta" type="range" min="2" max="7" step="0.5" value="3.5">
+        </div>
       </div>
 
       <div class="ctl">
@@ -229,6 +249,10 @@ const SCENARIOS = [
     hint: "In mPa·s. Water is 1.0 and normal blood is about 3.5. Left is thinner, right is thicker.",
     story: "Dehydration shrinks the watery part of blood, and too many red blood cells (for example, from living at high altitude) also thickens it. Too few red blood cells (anemia) thins it. Medicines called blood thinners mostly slow clotting and do not change how thick blood flows much. Only the thickness changes in this model.",
     tryIt: ["Set the thickness to 5.0. Find the push for normal flow.", "Now try 2.0, thinner than normal. What does the heart need?", "If you doubled the thickness, what push would you need?"] }
+
+  ,{ key: "Combined", tab: "Combine them.", short: "Change all three.", label: "", min: 0, max: 7, step: 1, base: 0, hint: "",
+    story: "In real life, more than one thing can go wrong at once. Here you can change the radius, the length, and the thickness together. The heart’s push still has to make up for all of them.",
+    tryIt: ["Predict first: with 30% plaque and a 20 cm artery, what push will you need? Then check.", "Find a combination the heart can still fix within 400 Pa.", "Find a combination it cannot fix."] }
 ];
 function plain(x, n) {
   if (x === 0) return "0";
@@ -236,11 +260,8 @@ function plain(x, n) {
   const num = Number(Number(x).toPrecision(k));
   return num.toLocaleString("en-US", { maximumFractionDigits: 12 });
 }
-function model(sc, prob, pushF) {
-  let rMm = R0_MM, Lcm = L0_CM, eta = ETA0;
-  if (sc === 0) rMm = R0_MM * (1 - prob * 0.1);
-  if (sc === 1) Lcm = prob;
-  if (sc === 2) eta = prob;
+function model(plaqueStep, Lcm, eta, pushF) {
+  const rMm = R0_MM * (1 - plaqueStep * 0.1);
   const r = rMm / 1000, L = Lcm / 100, e = eta / 1000;
   const dP = PUSH0 * pushF;
   const Q = Math.PI * Math.pow(r, 4) * dP / (8 * e * L);
@@ -261,10 +282,11 @@ function fmtFlow(Q) {
 }
 function fmtMult(x) { return "×" + plain(x, 3); }
 function fmtPct(x) { return (x >= 10 ? plain(x, 3) : plain(x, 2)) + "%"; }
-function settingText(sc, prob) {
-  if (sc === 0) return plain(R0_MM * (1 - prob * 0.1), 2) + " mm radius (" + (prob * 10) + "% narrower)";
-  if (sc === 1) return prob + " cm long (" + plain(prob / L0_CM, 3) + " times normal)";
-  return plain(prob, 2) + " mPa·s (" + plain(prob / ETA0, 3) + " times normal)";
+function settingText(sc, P) {
+  if (sc === 0) return plain(R0_MM * (1 - P.plaque * 0.1), 2) + " mm radius (" + (P.plaque * 10) + "% narrower)";
+  if (sc === 1) return P.len + " cm long (" + plain(P.len / L0_CM, 3) + " times normal)";
+  if (sc === 2) return plain(P.eta, 2) + " mPa·s (" + plain(P.eta / ETA0, 3) + " times normal)";
+  return plain(R0_MM * (1 - P.plaque * 0.1), 2) + " mm, " + P.len + " cm, " + plain(P.eta, 2) + " mPa·s";
 }
 function statusOf(pct) {
   if (Math.abs(pct - 100) <= 5) return { text: "Normal flow restored", cls: "ok" };
@@ -275,15 +297,15 @@ function flowWord(pct) {
   if (Math.abs(pct - 100) <= 5) return "yes";
   return pct < 100 ? "too low" : "too high";
 }
-function sentence(m, sc, prob) {
-  const base = SCENARIOS[sc].base;
-  if (prob === base) return "Everything is normal: " + fmtFlow(m.Q0) + " at a push of 50 Pa. Change the problem slider to start the challenge.";
+function sentence(m, sc, P) {
+  if (P.plaque === 0 && P.len === L0_CM && P.eta === ETA0) return "Everything is normal: " + fmtFlow(m.Q0) + " at a push of 50 Pa. Change the problem slider to start the challenge.";
   const atNormal = fmtFlow(m.Q0 * m.effect) + " (" + fmtPct(m.effect * 100) + " of normal)";
   const norm = fmtFlow(m.Q0);
   const tail = " Move the push slider to bring the flow back to " + norm + ".";
   if (sc === 0) return "The radius has narrowed from 2 mm to " + plain(m.rMm, 2) + " mm. At the normal push of 50 Pa, only " + atNormal + " would get through." + tail;
-  if (sc === 1) return "The artery is " + prob + " cm long instead of 10 cm. At the normal push of 50 Pa, only " + atNormal + " would get through." + tail;
-  return "The blood is " + plain(prob, 2) + " mPa·s thick instead of 3.5. At the normal push of 50 Pa, " + atNormal + " would get through." + tail;
+  if (sc === 1) return "The artery is " + P.len + " cm long instead of 10 cm. At the normal push of 50 Pa, only " + atNormal + " would get through." + tail;
+  if (sc === 2) return "The blood is " + plain(P.eta, 2) + " mPa·s thick instead of 3.5. At the normal push of 50 Pa, " + atNormal + " would get through." + tail;
+  return "Radius " + plain(m.rMm, 2) + " mm, length " + P.len + " cm, blood " + plain(P.eta, 2) + " mPa·s. At the normal push of 50 Pa, " + atNormal + " would get through." + tail;
 }
 /* PURE-END */
 
@@ -294,10 +316,13 @@ const ui = {
   flowMain: $("flowMain"), pctFill: $("pctFill"), pctText: $("pctText"), status: $("status"),
   needMain: $("needMain"), needPa: $("needPa"), strainMain: $("strainMain"), strainText: $("strainText"),
   nowFill: $("nowFill"), nowText: $("nowText"), limitTick: $("limitTick"),
-  says: $("says"), warn: $("warn"), canvas: $("artery"), pushScale: $("pushScale")
+  says: $("says"), warn: $("warn"), canvas: $("artery"), pushScale: $("pushScale"),
+  cPlaque: $("cPlaque"), cLen: $("cLen"), cEta: $("cEta"), cPlaqueOut: $("cPlaqueOut"), cLenOut: $("cLenOut"), cEtaOut: $("cEtaOut")
 };
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-let sc = 0, prob = 0, pushF = 1, calc = null, runs = [], cells = [], lastT = 0;
+let sc = 0, pushF = 1, calc = null, runs = [], cells = [], lastT = 0;
+const P = { plaque: 0, len: L0_CM, eta: ETA0 };
+const visited = [true, false, false, false];
 const MAX_RUNS = 14;
 
 /* ---------- drawing ---------- */
@@ -310,8 +335,8 @@ const AW = 1000, AH = 440;
 const R = 100;
 function geom() {
   const x0 = 150;
-  const px = 380 + ((sc === 1 ? prob : L0_CM) - 10) * 10.67;
-  const lr = R * (sc === 0 ? (1 - prob * 0.1) : 1);
+  const px = 380 + (P.len - 10) * 10.67;
+  const lr = R * (1 - P.plaque * 0.1);
   return { x0, x1: x0 + px, cy: 235, lr };
 }
 function sizeCanvas() {
@@ -323,7 +348,7 @@ function sizeCanvas() {
 }
 function cellTarget() {
   const g = geom();
-  const dens = sc === 2 ? calc.eta / ETA0 : 1;
+  const dens = calc.eta / ETA0;
   return Math.floor((60 + g.lr * 1.6) * dens * (g.x1 - g.x0) / 640);
 }
 function fixCells() {
@@ -348,7 +373,7 @@ function label(ctx, text, x, y, align, color, font) {
   ctx.fillStyle = color || css.ink; ctx.fillText(text, x, y);
 }
 function bloodColor() {
-  if (sc !== 2) return "#e2655a";
+  if (P.eta === ETA0) return "#e2655a";
   const t = Math.min(1, Math.max(0, (calc.eta - 2) / 5));
   const r = Math.round(240 - 70 * t), g = Math.round(140 - 90 * t), b = Math.round(130 - 80 * t);
   return "rgb(" + r + "," + g + "," + b + ")";
@@ -365,7 +390,7 @@ function draw(dt) {
   ctx.fillStyle = "#b5473b";
   ctx.fillRect(g.x0, g.cy - R - wallT, g.x1 - g.x0, wallT);
   ctx.fillRect(g.x0, g.cy + R, g.x1 - g.x0, wallT);
-  if (sc === 0 && prob > 0) {
+  if (P.plaque > 0) {
     ctx.fillStyle = "#e9cf7a";
     ctx.fillRect(g.x0, g.cy - R, g.x1 - g.x0, R - lr);
     ctx.fillRect(g.x0, g.cy + lr, g.x1 - g.x0, R - lr);
@@ -396,13 +421,13 @@ function draw(dt) {
   ctx.setLineDash([8, 7]); ctx.strokeStyle = css.muted; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(g.x0, g.cy - R); ctx.lineTo(g.x1, g.cy - R); ctx.moveTo(g.x0, g.cy + R); ctx.lineTo(g.x1, g.cy + R); ctx.stroke();
   ctx.setLineDash([4, 6]); ctx.beginPath(); ctx.moveTo(g.x0, g.cy); ctx.lineTo(g.x1, g.cy); ctx.stroke();
-  if (sc === 1 && prob > 10) {
+  if (P.len > 10) {
     const nx = g.x0 + 380;
     ctx.setLineDash([3, 5]); ctx.strokeStyle = css.ink; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(nx, g.cy - R - wallT - 6); ctx.lineTo(nx, g.cy + R + wallT + 6); ctx.stroke();
   }
   ctx.restore();
-  if (sc === 1 && prob > 10) label(ctx, "normal length (10 cm)", g.x0 + 380, g.cy - R - wallT - 20, "center", css.muted, "600 16px system-ui, sans-serif");
+  if (P.len > 10) label(ctx, "normal length (10 cm)", g.x0 + 380, g.cy - R - wallT - 20, "center", css.muted, "600 16px system-ui, sans-serif");
 
   const dP = PUSH0 * pushF;
   const wLine = 3 + 1.4 * Math.log2(pushF + 0.0001) + 1;
@@ -425,9 +450,9 @@ function draw(dt) {
   arrow(ctx, (g.x0 + g.x1) / 2 + 70, ly, g.x1, ly, 8);
   label(ctx, plain(calc.Lcm, 3) + " cm of artery", (g.x0 + g.x1) / 2, ly, "center", css.ink, "700 17px system-ui, sans-serif");
 
-  if (sc === 0 && prob > 0) label(ctx, "plaque", g.x0 + 110, g.cy - R + (R - lr) / 2, "center", "#5a4300", "700 16px system-ui, sans-serif");
+  if (P.plaque > 0) label(ctx, "plaque", g.x0 + 110, g.cy - R + (R - lr) / 2, "center", "#5a4300", "700 16px system-ui, sans-serif");
   label(ctx, "artery wall", g.x0 + 80, g.cy - R - wallT - 14, "center", css.muted, "600 16px system-ui, sans-serif");
-  if (sc === 2) {
+  if (P.eta !== ETA0) {
     ctx.font = "700 18px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
     ctx.lineWidth = 5; ctx.strokeStyle = "#4a0f0a"; ctx.strokeText("blood: " + plain(calc.eta, 2) + " mPa·s", g.x0 + 190, g.cy);
     ctx.fillStyle = "#ffffff"; ctx.fillText("blood: " + plain(calc.eta, 2) + " mPa·s", g.x0 + 190, g.cy);
@@ -456,7 +481,10 @@ function buildScale() {
 }
 function updateReadouts() {
   const S = SCENARIOS[sc];
-  ui.problemOut.textContent = settingText(sc, prob);
+  ui.problemOut.textContent = settingText(sc, P);
+  ui.cPlaqueOut.textContent = plain(R0_MM * (1 - P.plaque * 0.1), 2) + " mm radius (" + (P.plaque * 10) + "% narrower)";
+  ui.cLenOut.textContent = P.len + " cm";
+  ui.cEtaOut.textContent = plain(P.eta, 2) + " mPa·s";
   ui.pushOut.textContent = plain(calc.dP, 3) + " Pa (×" + plain(pushF, 3) + ")";
   ui.flowMain.textContent = fmtFlow(calc.Q);
   ui.pctText.textContent = "Normal is " + fmtFlow(calc.Q0) + ". Now: " + fmtPct(calc.pct) + " of normal.";
@@ -473,37 +501,73 @@ function updateReadouts() {
   ui.nowText.textContent = plain(calc.dP, 3) + " Pa (×" + plain(pushF, 3) + " normal)";
   ui.nowFill.style.width = (posFrac(pushF) * 100) + "%";
   ui.limitTick.style.left = (posFrac(STRAIN_LIMIT) * 100) + "%";
-  ui.says.textContent = sentence(calc, sc, prob);
+  ui.says.textContent = sentence(calc, sc, P);
   if (calc.Re >= 2000) {
     ui.warn.hidden = false;
     ui.warn.textContent = "This much flow would be turbulent, so the model is no longer reliable. Lower the heart’s push.";
   } else ui.warn.hidden = true;
 }
 function update() {
-  prob = parseFloat(ui.problem.value);
+  if (sc === 3) { P.plaque = parseInt(ui.cPlaque.value, 10); P.len = parseFloat(ui.cLen.value); P.eta = parseFloat(ui.cEta.value); }
+  else {
+    const v = parseFloat(ui.problem.value);
+    P.plaque = sc === 0 ? v : 0; P.len = sc === 1 ? v : L0_CM; P.eta = sc === 2 ? v : ETA0;
+  }
   pushF = 0.5 * Math.pow(2, parseFloat(ui.push.value) / 50);
-  calc = model(sc, prob, pushF);
+  calc = model(P.plaque, P.len, P.eta, pushF);
   fixCells();
   updateReadouts();
   if (reduceMotion) draw(0);
 }
+const TAB_NAMES = ["Plaque: a narrower artery", "Growth or weight gain: a longer path", "Dehydration or red blood cells: thicker or thinner blood"];
+function unlocked() { return visited[0] && visited[1] && visited[2]; }
+function refreshTabs() {
+  for (let k = 0; k < 3; k++) $("tab" + k).textContent = TAB_NAMES[k] + (visited[k] ? " ✓" : "");
+  const t3 = $("tab3");
+  t3.textContent = unlocked() ? "Combine them" : "🔒 Combine them";
+  t3.setAttribute("aria-disabled", unlocked() ? "false" : "true");
+  t3.title = unlocked() ? "" : "Open the other three tabs first.";
+}
 function setScenario(i) {
   sc = i;
+  visited[i] = true;
   const S = SCENARIOS[i];
-  for (let k = 0; k < 3; k++) $("tab" + k).setAttribute("aria-selected", k === i ? "true" : "false");
-  ui.problemLabel.textContent = S.label;
-  ui.problemHint.textContent = S.hint;
+  for (let k = 0; k < 4; k++) $("tab" + k).setAttribute("aria-selected", k === i ? "true" : "false");
+  $("singleCtl").hidden = (i === 3);
+  $("comboCtl").hidden = (i !== 3);
+  if (i < 3) {
+    ui.problemLabel.textContent = S.label;
+    ui.problemHint.textContent = S.hint;
+    ui.problem.min = S.min; ui.problem.max = S.max; ui.problem.step = S.step; ui.problem.value = S.base;
+  } else {
+    ui.cPlaque.value = 0; ui.cLen.value = L0_CM; ui.cEta.value = ETA0;
+  }
   ui.storyTitle.textContent = S.tab;
   ui.storyShort.textContent = S.short;
   ui.storyTip.textContent = S.story;
-  ui.problem.min = S.min; ui.problem.max = S.max; ui.problem.step = S.step; ui.problem.value = S.base;
   ui.push.value = 50;
   ui.tryTip.innerHTML = "";
   S.tryIt.forEach(t => { const l = document.createElement("span"); l.className = "tryline"; l.textContent = t; ui.tryTip.appendChild(l); });
   cells = [];
-  calc = model(sc, S.base, 1);
+  $("lockMsg").textContent = "";
+  refreshTabs();
+  P.plaque = 0; P.len = L0_CM; P.eta = ETA0;
+  calc = model(0, L0_CM, ETA0, 1);
   update();
 }
+function tryOpen(i) {
+  if (i === 3 && !unlocked()) {
+    const left = [];
+    for (let k = 0; k < 3; k++) if (!visited[k]) left.push(["Plaque", "Longer path", "Blood thickness"][k]);
+    $("lockMsg").textContent = "Open the other three tabs first. Still to open: " + left.join(", ") + ".";
+    return;
+  }
+  setScenario(i);
+}
+function checkUnlockHash() {
+  if (String(location.hash).toLowerCase() === "#unlock") { visited[0] = visited[1] = visited[2] = true; refreshTabs(); }
+}
+window.addEventListener("hashchange", checkUnlockHash);
 
 /* ---------- runs table ---------- */
 function renderRuns() {
@@ -523,7 +587,7 @@ function renderRuns() {
 }
 $("recBtn").addEventListener("click", () => {
   if (runs.length >= MAX_RUNS) return;
-  runs.push({ name: SCENARIOS[sc].key, setting: settingText(sc, prob), push: pushF, Q: calc.Q, pct: calc.pct, ok: flowWord(calc.pct) });
+  runs.push({ name: SCENARIOS[sc].key, setting: settingText(sc, P), push: pushF, Q: calc.Q, pct: calc.pct, ok: flowWord(calc.pct) });
   renderRuns();
 });
 $("clearBtn").addEventListener("click", () => { runs = []; $("copyMsg").textContent = ""; renderRuns(); });
@@ -537,7 +601,8 @@ $("copyBtn").addEventListener("click", () => {
   try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fail); else fail(); } catch (e) { fail(); }
 });
 $("resetBtn").addEventListener("click", () => setScenario(sc));
-[0, 1, 2].forEach(i => $("tab" + i).addEventListener("click", () => setScenario(i)));
+[0, 1, 2, 3].forEach(i => $("tab" + i).addEventListener("click", () => tryOpen(i)));
+["cPlaque", "cLen", "cEta"].forEach(k => ui[k].addEventListener("input", update));
 ui.problem.addEventListener("input", update);
 ui.push.addEventListener("input", update);
 
@@ -555,9 +620,10 @@ window.addEventListener("resize", layout);
 const mq = window.matchMedia("(prefers-color-scheme: dark)");
 if (mq.addEventListener) mq.addEventListener("change", () => { readColors(); if (calc && reduceMotion) draw(0); });
 
-calc = model(0, 0, 1);
+calc = model(0, L0_CM, ETA0, 1);
 layout();
 buildScale();
+checkUnlockHash();
 setScenario(0);
 renderRuns();
 
